@@ -36,9 +36,7 @@ except BaseException:
 PACKAGE_NAME = 'pymagnitude'
 PACKAGE_SHORT_NAME = 'magnitude'
 
-DOWNLOAD_REQ_WHEELS = [
-    ('http://download.pytorch.org/whl/cpu/', 'torch', ('0.4.1', '0.4.1.post2')),
-]
+DOWNLOAD_REQ_WHEELS = []
 
 
 def install_custom_sqlite3(THIRD_PARTY, INTERNAL):
