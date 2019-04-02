@@ -580,17 +580,9 @@ class Magnitude(object):
         identifier = threading.current_thread().ident
         conn_exists = identifier in self._cursors
         if not conn_exists or force_new:
-            if self.fd:
-                if os.name == 'nt':
-                    conn = self.sqlite3_connect(downloader, self.path,
-                                                check_same_thread=False)
-                else:
-                    conn = self.sqlite3_connect(downloader,
-                                                '/dev/fd/%d' % self.fd,
-                                                check_same_thread=False)
-            elif self.stream:
-                conn = self.sqlite3_connect(downloader,
-                                            self.path, check_same_thread=False)
+            if self.fd or self.stream:
+                conn = self.sqlite3_connect(downloader, self.path,
+                                            check_same_thread=False)
             else:
                 conn = self.sqlite3_connect(downloader,
                                             self.path, check_same_thread=False)
