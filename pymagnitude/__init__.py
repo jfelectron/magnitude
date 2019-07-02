@@ -573,6 +573,13 @@ class Magnitude(object):
         else:
             return self.driver.connect(*args, **kwargs)
 
+    def flush_db(self):
+        """Flushes all connection/thread pools."""
+        self._conns = {}
+        self._cursors = {}
+        self._threads = []
+        return self._db(force_new=True)
+
     def _db(self, force_new=False, downloader=False):
         """Returns a cursor to the database. Each thread gets its
         own cursor.
