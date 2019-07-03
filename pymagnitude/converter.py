@@ -27,7 +27,6 @@ except ImportError:
 # Import AllenNLP
 sys.path.append(os.path.dirname(__file__) + '/third_party/')
 sys.path.append(os.path.dirname(__file__) + '/third_party_mock/')
-from pymagnitude.third_party.allennlp.commands.elmo import ElmoEmbedder
 
 # Import SQLite
 try:
@@ -233,7 +232,7 @@ def convert(input_file_path, output_file_path=None,
 
         class KeyedVectors:
             pass
-        elmo = ElmoEmbedder(elmo_options_path, input_file_path)
+        elmo = None
         keyed_vectors = KeyedVectors()
         number_of_keys = len(vocab_magnitude)
         dimensions = np.concatenate(elmo.embed_batch(
