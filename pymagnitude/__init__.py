@@ -361,7 +361,7 @@ class Magnitude(object):
             .fetchall()
         self.version = version_query[0][0] if len(version_query) > 0 else 1
         if ngram_oov is None:
-            self.ngram_oov = not(self._is_lm())
+            self.ngram_oov = True
         else:
             self.ngram_oov = ngram_oov
         if normalized is None:
