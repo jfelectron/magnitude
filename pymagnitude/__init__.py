@@ -36,7 +36,6 @@ from pymagnitude.converter_shared import CONVERTER_VERSION
 from pymagnitude.converter_shared import fast_md5_file
 from pymagnitude.converter_shared import char_ngrams
 from pymagnitude.converter_shared import norm_matrix
-from pymagnitude.converter_shared import unroll_elmo
 from pymagnitude.converter_shared import KeyList
 
 try:
@@ -76,7 +75,6 @@ except NameError:
 # Import AllenNLP
 sys.path.append(os.path.dirname(__file__) + '/third_party/')
 sys.path.append(os.path.dirname(__file__) + '/third_party_mock/')
-from pymagnitude.third_party.allennlp.commands.elmo import ElmoEmbedder
 
 # Import SQLite
 try:
@@ -362,10 +360,6 @@ class Magnitude(object):
             "SELECT value FROM magnitude_format WHERE key='version'") \
             .fetchall()
         self.version = version_query[0][0] if len(version_query) > 0 else 1
-        elmo_query = self._db().execute(
-            "SELECT value FROM magnitude_format WHERE key='elmo'") \
-            .fetchall()
-        self.elmo = len(elmo_query) > 0 and elmo_query[0][0]
         if ngram_oov is None:
             self.ngram_oov = not(self._is_lm())
         else:
@@ -448,7 +442,6 @@ class Magnitude(object):
         self.setup_for_mmap = False
         self._all_vectors = None
         self._approx_index = None
-        self._elmo_embedder = None
         if self.eager:
             mmap_thread = threading.Thread(target=self.get_vectors_mmap,
                                            args=(False,))
@@ -461,12 +454,6 @@ class Magnitude(object):
                 self._threads.append(approx_mmap_thread)
                 approx_mmap_thread.daemon = True
                 approx_mmap_thread.start()
-            if self.elmo:
-                elmo_thread = threading.Thread(
-                    target=self.get_elmo_embedder, args=(False,))
-                self._threads.append(elmo_thread)
-                elmo_thread.daemon = True
-                elmo_thread.start()
 
         # Create cached methods
         if self.lazy_loading <= 0:
@@ -507,14 +494,11 @@ class Magnitude(object):
             self.get_vectors_mmap()  # Wait for mmap to be available
             if self.approx:
                 self.get_approx_index()  # Wait for approx mmap to be available
-            if self.elmo:
-                self.get_elmo_embedder()  # Wait for approx mmap to be available
 
     def _setup_for_mmap(self):
         # Setup variables for get_vectors_mmap()
         self._all_vectors = None
         self._approx_index = None
-        self._elmo_embedder = None
         if not self.memory_db:
             self.db_hash = fast_md5_file(self.path, stream=self.stream)
         else:
@@ -527,20 +511,10 @@ class Magnitude(object):
                                          self.md5 + '.magmmap')
         self.path_to_approx_mmap = os.path.join(self.temp_dir,
                                                 self.md5 + '.approx.magmmap')
-        self.path_to_elmo_w_mmap = os.path.join(self.temp_dir,
-                                                self.md5 + '.elmo.hdf5.magmmap')
-        self.path_to_elmo_o_mmap = os.path.join(self.temp_dir,
-                                                self.md5 + '.elmo.json.magmmap')
         if self.path_to_mmap not in Magnitude.MMAP_THREAD_LOCK:
             Magnitude.MMAP_THREAD_LOCK[self.path_to_mmap] = threading.Lock()
         if self.path_to_approx_mmap not in Magnitude.MMAP_THREAD_LOCK:
             Magnitude.MMAP_THREAD_LOCK[self.path_to_approx_mmap] = \
-                threading.Lock()
-        if self.path_to_elmo_w_mmap not in Magnitude.MMAP_THREAD_LOCK:
-            Magnitude.MMAP_THREAD_LOCK[self.path_to_elmo_w_mmap] = \
-                threading.Lock()
-        if self.path_to_elmo_o_mmap not in Magnitude.MMAP_THREAD_LOCK:
-            Magnitude.MMAP_THREAD_LOCK[self.path_to_elmo_o_mmap] = \
                 threading.Lock()
         self.MMAP_THREAD_LOCK = Magnitude.MMAP_THREAD_LOCK[self.path_to_mmap]
         self.MMAP_PROCESS_LOCK = InterProcessLock(self.path_to_mmap + '.lock')
@@ -548,14 +522,6 @@ class Magnitude(object):
             Magnitude.MMAP_THREAD_LOCK[self.path_to_approx_mmap]
         self.APPROX_MMAP_PROCESS_LOCK = \
             InterProcessLock(self.path_to_approx_mmap + '.lock')
-        self.ELMO_W_MMAP_THREAD_LOCK = \
-            Magnitude.MMAP_THREAD_LOCK[self.path_to_elmo_w_mmap]
-        self.ELMO_W_MMAP_PROCESS_LOCK = \
-            InterProcessLock(self.path_to_elmo_w_mmap + '.lock')
-        self.ELMO_O_MMAP_THREAD_LOCK = \
-            Magnitude.MMAP_THREAD_LOCK[self.path_to_elmo_o_mmap]
-        self.ELMO_O_MMAP_PROCESS_LOCK = \
-            InterProcessLock(self.path_to_elmo_o_mmap + '.lock')
         self.setup_for_mmap = True
 
     def sqlite3_connect(self, downloader, *args, **kwargs):
@@ -846,24 +812,11 @@ class Magnitude(object):
         else:
             return xxhash.xxh32(val.encode('utf-8')).intdigest()
 
-    def _is_lm(self):
-        """Check if using a language model"""
-        return self.elmo
 
     def _process_lm_output(self, q, normalized):
         """Process the output from a language model"""
         zero_d = not(isinstance(q, list))
         one_d = not(zero_d) and (len(q) == 0 or not(isinstance(q[0], list)))
-        if self.elmo:
-            if zero_d:
-                r_val = np.concatenate(self.get_elmo_embedder().embed_batch(
-                    [[q]])[0], axis=1).flatten()
-            elif one_d:
-                r_val = np.concatenate(self.get_elmo_embedder().embed_batch(
-                    [q])[0], axis=1)
-            else:
-                r_val = [np.concatenate(row, axis=1)
-                         for row in self.get_elmo_embedder().embed_batch(q)]
         if normalized:
             if zero_d:
                 r_val = r_val / np.linalg.norm(r_val)
@@ -930,8 +883,6 @@ class Magnitude(object):
         normalized = normalized if normalized is not None else self.normalized
         orig_key = key
         is_str, key = self._oov_key_t(key)
-        if self._is_lm() and is_str and not force:
-            return self._process_lm_output(key, normalized)
         if not is_str:
             seed = self._seed(type(key).__name__)
             Magnitude.OOV_RNG_LOCK.acquire()
@@ -1229,10 +1180,7 @@ class Magnitude(object):
     def unroll(self, v):
         """ Unrolls a vector if it was concatenated from its base model
         form. """
-        if self.elmo and isinstance(v, np.ndarray):
-            return unroll_elmo(v, self.placeholders)
-        else:
-            return v
+        return v
 
     def index(self, q, return_vector=True):
         """Gets a key for an index or multiple indices."""
@@ -1757,83 +1705,6 @@ build the appropriate indexes into the `.magnitude` file.")
                                 pass
                 sleep(1)  # Block before trying again
         return self._approx_index
-
-    def get_elmo_embedder(self, log=True):
-        """Gets an ElmoEmbedder of the vectors from the database."""
-        meta_1_chunks = self.get_meta_chunks(1)
-        meta_2_chunks = self.get_meta_chunks(2)
-        if self._elmo_embedder is None:
-            logged = False
-            while True:
-                if not self.setup_for_mmap:
-                    self._setup_for_mmap()
-                try:
-                    if len(self.devices) > 0:
-                        elmo_embedder = ElmoEmbedder(
-                            self.path_to_elmo_o_mmap, self.path_to_elmo_w_mmap,
-                            cuda_device=self.devices[0])
-                    else:
-                        elmo_embedder = ElmoEmbedder(
-                            self.path_to_elmo_o_mmap, self.path_to_elmo_w_mmap)
-                    self._elmo_embedder = elmo_embedder
-                    break
-                except BaseException:
-                    if not logged and log and self.log:
-                        _log("Need to build ElmoEmbedder. "
-                             "This may take some time...but it only "
-                             "needs to be done once (even between "
-                             "multiple runs of this program). The result"
-                             " will get stashed into a temporary "
-                             "directory on your "
-                             "computer.")
-                    path_to_elmo_w_mmap_temp = self.path_to_elmo_w_mmap \
-                        + '.tmp'
-                    path_to_elmo_o_mmap_temp = self.path_to_elmo_o_mmap \
-                        + '.tmp'
-                    tlock_w = self.ELMO_W_MMAP_THREAD_LOCK.acquire(False)
-                    plock_w = self.ELMO_W_MMAP_PROCESS_LOCK.acquire(0)
-                    tlock_o = self.ELMO_O_MMAP_THREAD_LOCK.acquire(False)
-                    plock_o = self.ELMO_O_MMAP_PROCESS_LOCK.acquire(0)
-                    if tlock_w and plock_w and tlock_o and plock_o:
-                        try:
-                            with open(path_to_elmo_w_mmap_temp, "w+b") \
-                                    as mmap_file:
-                                last_p = 0
-                                for i, (length, chunk) \
-                                        in enumerate(meta_1_chunks):
-                                    progress = round((float(i) / float(length)) * 100, 2)  # noqa
-                                    if log and self.log and int(progress) > last_p:  # noqa
-                                        last_p = int(progress)
-                                        _log("Progress: %.2f%%" %
-                                             (progress,))
-                                    mmap_file.write(chunk)
-                            if not self.closed:
-                                os.rename(path_to_elmo_w_mmap_temp,
-                                          self.path_to_elmo_w_mmap)
-                            else:
-                                return
-                            with open(path_to_elmo_o_mmap_temp, "w+b") \
-                                    as mmap_file:
-                                for _, chunk in meta_2_chunks:
-                                    mmap_file.write(chunk)
-                            if not self.closed:
-                                os.rename(path_to_elmo_o_mmap_temp,
-                                          self.path_to_elmo_o_mmap)
-                            else:
-                                return
-                        finally:
-                            self.ELMO_W_MMAP_THREAD_LOCK.release()
-                            try:
-                                self.ELMO_W_MMAP_PROCESS_LOCK.release()
-                            except BaseException:
-                                pass
-                            self.ELMO_O_MMAP_THREAD_LOCK.release()
-                            try:
-                                self.ELMO_O_MMAP_PROCESS_LOCK.release()
-                            except BaseException:
-                                pass
-                sleep(1)  # Block before trying again
-        return self._elmo_embedder
 
     def _iter(self, put_cache, downloader=False):
         """Yields keys and vectors for all vectors in the store."""
