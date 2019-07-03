@@ -362,10 +362,9 @@ class Magnitude(object):
         self.version = version_query[0][0] if len(version_query) > 0 else 1
         if ngram_oov is None:
             self.ngram_oov = True
-        else:
             self.ngram_oov = ngram_oov
         if normalized is None:
-            self.normalized = not(self._is_lm())
+            self.normalized = True
         else:
             self.normalized = normalized
             if not self.normalized:
@@ -812,72 +811,6 @@ class Magnitude(object):
         else:
             return xxhash.xxh32(val.encode('utf-8')).intdigest()
 
-
-    def _process_lm_output(self, q, normalized):
-        """Process the output from a language model"""
-        zero_d = not(isinstance(q, list))
-        one_d = not(zero_d) and (len(q) == 0 or not(isinstance(q[0], list)))
-        if normalized:
-            if zero_d:
-                r_val = r_val / np.linalg.norm(r_val)
-            elif one_d:
-                r_val = norm_matrix(r_val)
-            else:
-                r_val = [norm_matrix(row) for row in r_val]
-        if self.placeholders > 0 or self.ngram_oov:
-            shape_p = list(r_val.shape) if zero_d or one_d else \
-                ([len(r_val)] + list(max((row.shape for row in r_val))))
-            shape_p[-1] = self.dim
-            if self.placeholders > 0:
-                if zero_d or one_d:
-                    r_val_p = np.zeros(shape_p, dtype=self.dtype)
-                else:
-                    r_val_p = [np.zeros(shape_p[1:], dtype=self.dtype)
-                               for row in r_val]
-            else:
-                r_val_p = r_val
-            if self.ngram_oov:
-                if zero_d:
-                    lookup = self._vectors_for_keys_cached(
-                        [q], normalized=normalized, force=True)
-                elif one_d:
-                    lookup = self._vectors_for_keys_cached(
-                        q, normalized=normalized, force=True)
-                else:
-                    lookup = [None] * len(q)
-                    for row, sq in enumerate(q):
-                        lookup[row] = self._vectors_for_keys_cached(
-                            sq, normalized=normalized, force=True)
-            for idx in product(*[xrange(s) for s in shape_p[:-1]]):
-                if zero_d:
-                    key = q
-                    if self.ngram_oov:
-                        vec = r_val if self.__contains__(key) else lookup[0]
-                    else:
-                        vec = r_val
-                    r_val_p[:self.emb_dim] = vec[:self.emb_dim]
-                elif one_d:
-                    key = q[idx[0]]
-                    if self.ngram_oov:
-                        vec = r_val[idx] if self.__contains__(key) else \
-                            lookup[idx[0]]
-                    else:
-                        vec = r_val[idx]
-                    r_val_p[idx][:self.emb_dim] = vec[:self.emb_dim]
-                elif idx[1] < len(q[idx[0]]):
-                    key = q[idx[0]][idx[1]]
-                    if self.ngram_oov:
-                        vec = r_val[idx[0]][idx[1]] if self.__contains__(key) \
-                            else lookup[idx[0]][idx[1]]
-                    else:
-                        vec = r_val[idx[0]][idx[1]]
-                    r_val_p[idx[0]][idx[1]][:self.emb_dim] = vec[:self.emb_dim]
-            r_val = r_val_p
-        if self.use_numpy:
-            return r_val
-        else:
-            return r_val.tolist()
-
     def _out_of_vocab_vector(self, key, normalized=None, force=False):
         """Generates a random vector based on the hash of the key."""
         normalized = normalized if normalized is not None else self.normalized
@@ -992,9 +925,6 @@ class Magnitude(object):
     def _vectors_for_keys_cached(self, keys, normalized=None, force=False):
         """Queries the database for multiple keys."""
         normalized = normalized if normalized is not None else self.normalized
-        if self._is_lm() and not force:
-            keys = [self._key_t(key) for key in keys]
-            return self._process_lm_output(keys, normalized)
         unseen_keys = tuple(
             key for key in keys)
         unseen_keys_map = {}
@@ -1039,18 +969,12 @@ class Magnitude(object):
                    for key in keys]
         return vectors
 
+
     def _vectors_for_2d_keys(self, keys2d, normalized=None):
         """Queries the database for 2D keys."""
         normalized = normalized if normalized is not None else self.normalized
-        if self._is_lm():
-            # Only language models benefit from this kind of 2D batching,
-            # SQLite is slightly faster with more batching, but it also has
-            # a turning point where that changes
-            keys2d = [[self._key_t(key) for key in keys] for keys in keys2d]
-            return self._process_lm_output(keys2d, normalized)
-        else:
-            return (self._vectors_for_keys_cached(row, normalized)
-                    for row in keys2d)
+        return (self._vectors_for_keys_cached(row, normalized)
+                for row in keys2d)
 
     def _key_for_index(self, index, return_vector=True):
         """Queries the database the key at a single index."""
